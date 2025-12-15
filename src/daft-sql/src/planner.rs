@@ -904,7 +904,7 @@ impl SQLPlanner<'_> {
             let left_schema = left_planner.current_plan_ref().schema();
 
             left_planner.update_plan(|plan| {
-                plan.join(right_plan, on, using, join_type, None, join_options)
+                plan.join(right_plan, on, using, join_type, None, join_options, None)
             })?;
 
             // add a project to reorder columns since `USING` should return [left columns, remaining right columns]

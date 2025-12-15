@@ -81,6 +81,7 @@ impl OptimizerRule for SimplifyNullFilteredJoin {
                                 on.clone(),
                                 simplified_join_type,
                                 *join_strategy,
+                                None,
                             )?
                             .into();
                             return Ok(Transformed::yes(

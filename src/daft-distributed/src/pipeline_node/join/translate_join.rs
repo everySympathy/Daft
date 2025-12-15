@@ -1,6 +1,6 @@
 use std::cmp::max;
 
-use common_error::DaftResult;
+use common_error::{DaftError, DaftResult};
 use daft_dsl::{ExprRef, expr::bound_expr::BoundExpr, is_partition_compatible};
 use daft_logical_plan::{
     ClusteringSpec, JoinStrategy, JoinType,
@@ -330,6 +330,11 @@ impl LogicalPlanToPipelineNodeTranslator {
             ),
             JoinStrategy::Cross => {
                 self.gen_cross_join_node(left_node, right_node, join.output_schema.clone())
+            }
+            JoinStrategy::KeyFiltering => {
+                Err(DaftError::InternalError(
+                    "KeyFiltering anti-joins should be resolved by apply_skip_existing_predicates before physical planning".to_string(),
+                ))
             }
         }
     }

@@ -80,9 +80,15 @@ impl OptimizerRule for PushDownJoinPredicate {
                         right.clone()
                     };
 
-                    let new_join =
-                        Join::try_new(new_left, new_right, new_on, *join_type, *join_strategy)?
-                            .into();
+                    let new_join = Join::try_new(
+                        new_left,
+                        new_right,
+                        new_on,
+                        *join_type,
+                        *join_strategy,
+                        None,
+                    )?
+                    .into();
 
                     return Ok(Transformed::yes(new_join));
                 }

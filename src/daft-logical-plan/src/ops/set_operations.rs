@@ -57,7 +57,7 @@ fn intersect_or_except_plan(
 
     let on = JoinPredicate::try_new(on_expr)?;
 
-    let join = logical_plan::Join::try_new(lhs, rhs, on, join_type, None);
+    let join = logical_plan::Join::try_new(lhs, rhs, on, join_type, None, None);
     join.map(|j| Distinct::new(j.into(), None).into())
 }
 

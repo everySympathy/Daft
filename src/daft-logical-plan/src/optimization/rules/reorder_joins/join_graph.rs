@@ -571,6 +571,7 @@ impl JoinGraph {
                     JoinPredicate::try_new(on)?,
                     JoinType::Inner,
                     None,
+                    None,
                 )?;
 
                 Ok(join_plan.into())

@@ -586,8 +586,12 @@ class RayRunner(Runner[ray.ObjectRef]):
         if dashboard_url:
             logger.info("Daft Dashboard: %s/query/%s", dashboard_url, query_id)
 
+        cleanup = None
         try:
             # Optimize the logical plan.
+            from daft.execution.skip_existing import maybe_apply_skip_existing
+
+            builder, cleanup = maybe_apply_skip_existing(builder)
             builder = builder.optimize(daft_execution_config)
 
             distributed_plan = DistributedPhysicalPlan.from_logical_plan_builder(
@@ -659,6 +663,9 @@ class RayRunner(Runner[ray.ObjectRef]):
             if should_notify:
                 ctx._notify_query_end(query_id, PyQueryResult(QueryEndState.Failed, str(e)))
             raise
+        finally:
+            if cleanup is not None:
+                cleanup()
 
         return ExecutionMetadata._from_runner_output(stats, query_id, physical_plan_json)
 

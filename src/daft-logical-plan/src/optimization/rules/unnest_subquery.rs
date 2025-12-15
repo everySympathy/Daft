@@ -160,6 +160,7 @@ impl UnnestScalarSubquery {
                     on,
                     join_type,
                     None,
+                    None,
                 )?)))
             })?;
 
@@ -360,6 +361,7 @@ impl OptimizerRule for UnnestPredicateSubquery {
                         decorrelated_subquery,
                         on,
                         join_type,
+                        None,
                         None,
                     )?)))
                 })?;

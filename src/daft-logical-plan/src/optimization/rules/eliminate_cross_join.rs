@@ -324,6 +324,7 @@ fn find_inner_join(
                 on,
                 JoinType::Inner,
                 None,
+                None,
             )?)
             .arced());
         }
@@ -338,6 +339,7 @@ fn find_inner_join(
         right,
         JoinPredicate::empty(),
         JoinType::Inner,
+        None,
         None,
     )?)
     .arced())

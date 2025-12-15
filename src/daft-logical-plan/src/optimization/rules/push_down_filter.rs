@@ -431,6 +431,7 @@ impl PushDownFilter {
                         on.clone(),
                         *join_type,
                         *join_strategy,
+                        None,
                     )?));
 
                     if let Some(kept_predicates) = kept_predicates {

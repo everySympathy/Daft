@@ -86,6 +86,8 @@ class NativeRunner(Runner[MicroPartition]):
         # NOTE: Freeze and use this same execution config for the entire execution
         ctx = get_context()
         query_id = generate_query_name()
+        if builder._builder.get_skip_existing_specs():
+            raise RuntimeError("DataFrame.skip_existing() is only supported on Ray runner")
         output_schema = builder.schema()
 
         entrypoint = "python " + " ".join(sys.argv)

@@ -14,7 +14,7 @@ use common_error::{DaftError, DaftResult};
 use common_file_formats::{FileFormat, WriteMode};
 use common_io_config::IOConfig;
 use common_scan_info::{PhysicalScanInfo, Pushdowns, ScanOperatorRef, Sharder, ShardingStrategy};
-use common_treenode::TreeNode;
+use common_treenode::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use daft_algebra::boolean::combine_conjunction;
 use daft_core::join::{JoinStrategy, JoinType};
 use daft_dsl::{
@@ -46,9 +46,10 @@ use crate::{
         join::{JoinOptions, JoinPredicate},
     },
     optimization::{OptimizerBuilder, OptimizerConfig},
-    partitioning::{HashRepartitionConfig, RandomShuffleConfig, RepartitionSpec},
+    partitioning::{ClusteringSpec, HashRepartitionConfig, RandomShuffleConfig, RepartitionSpec},
     sink_info::{FormatSinkOption, OutputFileInfo, SinkInfo},
-    source_info::{GlobScanInfo, InMemoryInfo, SourceInfo},
+    source_info::{GlobScanInfo, InMemoryInfo, PlaceHolderInfo, SourceInfo},
+    stats::StatsState,
 };
 
 /// A logical plan builder, which simplifies constructing logical plans via
@@ -165,6 +166,20 @@ impl LogicalPlanBuilder {
         let logical_plan: LogicalPlan = ops::Source::new(schema, source_info.into()).into();
 
         Ok(Self::from(Arc::new(logical_plan)))
+    }
+
+    pub fn placeholder_scan(schema: SchemaRef) -> Self {
+        let source = LogicalPlan::Source(ops::Source {
+            plan_id: None,
+            node_id: None,
+            output_schema: schema.clone(),
+            source_info: Arc::new(SourceInfo::PlaceHolder(PlaceHolderInfo::new(
+                schema,
+                Arc::new(ClusteringSpec::unknown()),
+            ))),
+            stats_state: StatsState::NotMaterialized,
+        });
+        Self::from(Arc::new(source))
     }
 
     /// Creates a `LogicalPlan::Source` from glob paths.
@@ -332,6 +347,72 @@ impl LogicalPlanBuilder {
 
         let logical_plan: LogicalPlan = ops::Filter::try_new(self.plan.clone(), predicate)?.into();
         Ok(self.with_new_plan(logical_plan))
+    }
+
+    pub fn apply_skip_existing_predicates(
+        &self,
+        predicates: Vec<Option<ExprRef>>,
+    ) -> DaftResult<Self> {
+        let mut count = 0usize;
+        self.plan.apply(|node| {
+            if let LogicalPlan::Join(join) = node.as_ref()
+                && join.join_strategy == Some(JoinStrategy::KeyFiltering)
+            {
+                count += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if count != predicates.len() {
+            return Err(DaftError::ValueError(format!(
+                "skip_existing count mismatch: plan has {}, but got {} predicates",
+                count,
+                predicates.len()
+            )));
+        }
+
+        struct Apply {
+            predicates: Vec<Option<ExprRef>>,
+            idx: usize,
+        }
+        impl TreeNodeRewriter for Apply {
+            type Node = Arc<LogicalPlan>;
+            fn f_down(&mut self, node: Self::Node) -> DaftResult<Transformed<Self::Node>> {
+                Ok(Transformed::no(node))
+            }
+            fn f_up(&mut self, node: Self::Node) -> DaftResult<Transformed<Self::Node>> {
+                if let LogicalPlan::Join(join) = node.as_ref()
+                    && join.join_strategy == Some(JoinStrategy::KeyFiltering)
+                {
+                    let input = join.left.clone();
+                    let filter_batch_size = join
+                        .skip_existing_spec
+                        .as_ref()
+                        .and_then(|s| s.filter_batch_size);
+                    let pred_opt = self.predicates[self.idx].clone();
+                    self.idx += 1;
+                    if let Some(predicate) = pred_opt {
+                        let expr_resolver =
+                            ExprResolver::builder().allow_actor_pool_udf(true).build();
+                        // If filter_batch_size is set, wrap input with IntoBatches first
+                        let filter_input = if let Some(batch_size) = filter_batch_size {
+                            Arc::new(ops::IntoBatches::new(input, batch_size).into())
+                        } else {
+                            input
+                        };
+                        let resolved =
+                            expr_resolver.resolve_single(predicate, filter_input.clone())?;
+                        let new_lp: LogicalPlan =
+                            ops::Filter::try_new(filter_input, resolved)?.into();
+                        return Ok(Transformed::yes(Arc::new(new_lp)));
+                    }
+                    return Ok(Transformed::yes(input));
+                }
+                Ok(Transformed::no(node))
+            }
+        }
+        let mut rewriter = Apply { predicates, idx: 0 };
+        let transformed = self.plan.clone().rewrite(&mut rewriter)?;
+        Ok(self.with_new_plan(transformed.data))
     }
 
     pub fn resolve_window_spec(&self, window_spec: WindowSpec) -> DaftResult<WindowSpec> {
@@ -589,6 +670,7 @@ impl LogicalPlanBuilder {
             JoinType::Inner,
             None,
             Default::default(),
+            None,
         )
     }
 
@@ -601,6 +683,7 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         join_strategy: Option<JoinStrategy>,
         options: JoinOptions,
+        skip_existing_spec: Option<ops::SkipExistingSpec>,
     ) -> DaftResult<Self> {
         let left_plan = self.plan.clone();
         let right_plan = right.into();
@@ -636,9 +719,15 @@ impl LogicalPlanBuilder {
 
         let combined_on = JoinPredicate::try_new(combined_on)?;
 
-        let logical_plan: LogicalPlan =
-            ops::Join::try_new(left_plan, right_plan, combined_on, join_type, join_strategy)?
-                .into();
+        let logical_plan: LogicalPlan = ops::Join::try_new(
+            left_plan,
+            right_plan,
+            combined_on,
+            join_type,
+            join_strategy,
+            skip_existing_spec,
+        )?
+        .into();
         Ok(self.with_new_plan(logical_plan))
     }
 
@@ -647,7 +736,7 @@ impl LogicalPlanBuilder {
         right: Right,
         options: JoinOptions,
     ) -> DaftResult<Self> {
-        self.join(right, None, vec![], JoinType::Inner, None, options)
+        self.join(right, None, vec![], JoinType::Inner, None, options, None)
     }
 
     pub fn concat(&self, other: &Self) -> DaftResult<Self> {
@@ -1093,6 +1182,11 @@ impl PyLogicalPlanBuilder {
     }
 
     #[staticmethod]
+    pub fn placeholder_scan(schema: PySchema) -> Self {
+        LogicalPlanBuilder::placeholder_scan(schema.into()).into()
+    }
+
+    #[staticmethod]
     pub fn from_glob_scan(
         glob_paths: Vec<String>,
         io_config: Option<PyIOConfig>,
@@ -1125,6 +1219,33 @@ impl PyLogicalPlanBuilder {
 
     pub fn filter(&self, predicate: PyExpr) -> PyResult<Self> {
         Ok(self.builder.filter(predicate.expr)?.into())
+    }
+
+    pub fn apply_skip_existing_predicates(
+        &self,
+        predicates: Vec<Option<PyExpr>>,
+    ) -> PyResult<Self> {
+        let preds = predicates
+            .into_iter()
+            .map(|p| p.map(|expr| expr.into()))
+            .collect();
+        Ok(self.builder.apply_skip_existing_predicates(preds)?.into())
+    }
+
+    pub fn get_skip_existing_specs(&self, _py: Python) -> PyResult<Vec<ops::PySkipExistingSpec>> {
+        use common_treenode::TreeNodeRecursion;
+
+        let mut specs = Vec::new();
+        self.builder.plan.apply(|node| {
+            if let LogicalPlan::Join(join) = node.as_ref()
+                && let Some(spec) = &join.skip_existing_spec
+            {
+                specs.push(spec.clone());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+
+        Ok(specs.into_iter().map(|spec| spec.into()).collect())
     }
 
     pub fn limit(&self, limit: i64, eager: bool) -> PyResult<Self> {
@@ -1291,7 +1412,8 @@ impl PyLogicalPlanBuilder {
         join_type,
         join_strategy,
         prefix,
-        suffix
+        suffix,
+        skip_existing_spec=None
     ))]
     pub fn join(
         &self,
@@ -1302,6 +1424,7 @@ impl PyLogicalPlanBuilder {
         join_strategy: Option<JoinStrategy>,
         prefix: Option<String>,
         suffix: Option<String>,
+        skip_existing_spec: Option<ops::PySkipExistingSpec>,
     ) -> PyResult<Self> {
         let left_on = left_on.into_iter().map(|expr| expr.expr);
         let right_on = right_on.into_iter().map(|expr| expr.expr);
@@ -1338,6 +1461,7 @@ impl PyLogicalPlanBuilder {
                 join_type,
                 join_strategy,
                 JoinOptions { prefix, suffix },
+                skip_existing_spec.map(|s| s.spec),
             )?
             .into())
     }

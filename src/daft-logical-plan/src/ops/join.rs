@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     LogicalPlan, LogicalPlanRef,
     logical_plan::{self},
-    ops::Project,
+    ops::{Project, skip_existing::SkipExistingSpec},
     stats::{ApproxStats, PlanStats, StatsState},
 };
 
@@ -185,6 +185,9 @@ pub struct Join {
     pub join_strategy: Option<JoinStrategy>,
     pub output_schema: SchemaRef,
     pub stats_state: StatsState,
+    /// Only set when join_strategy == Some(KeyFiltering) and join_type == Anti.
+    /// Carries the configuration for the skip_existing key-filtering anti-join.
+    pub skip_existing_spec: Option<SkipExistingSpec>,
 }
 
 impl Join {
@@ -198,6 +201,7 @@ impl Join {
         on: JoinPredicate,
         join_type: JoinType,
         join_strategy: Option<JoinStrategy>,
+        skip_existing_spec: Option<SkipExistingSpec>,
     ) -> logical_plan::Result<Self> {
         let output_schema = infer_join_schema(&left.schema(), &right.schema(), join_type)?;
 
@@ -211,6 +215,7 @@ impl Join {
             join_strategy,
             output_schema,
             stats_state: StatsState::NotMaterialized,
+            skip_existing_spec,
         })
     }
 
@@ -369,6 +374,23 @@ impl Join {
 
         if let Some(on_expr) = self.on.inner() {
             res.push(format!("On = {on_expr}",));
+        }
+
+        if let Some(spec) = &self.skip_existing_spec {
+            let path_display = if spec.existing_path.len() == 1 {
+                spec.existing_path[0].as_str().to_string()
+            } else {
+                format!("{:?}", spec.existing_path)
+            };
+            let key_display = if spec.key_column.len() == 1 {
+                spec.key_column[0].as_str().to_string()
+            } else {
+                format!("{:?}", spec.key_column)
+            };
+            res.push(format!(
+                "SkipExisting: path = {}, format = {:?}, on = {}",
+                path_display, spec.file_format, key_display
+            ));
         }
 
         res.push(format!(

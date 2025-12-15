@@ -200,6 +200,7 @@ impl OptimizerRule for PushDownAntiSemiJoin {
                                 new_on,
                                 *join_type,
                                 *join_strategy,
+                                None,
                             )?
                             .into();
 
@@ -247,6 +248,7 @@ impl OptimizerRule for PushDownAntiSemiJoin {
                                     on.clone(),
                                     *join_type,
                                     *join_strategy,
+                                    None,
                                 )?
                                 .into();
 
@@ -262,6 +264,7 @@ impl OptimizerRule for PushDownAntiSemiJoin {
                                     on.clone(),
                                     *join_type,
                                     *join_strategy,
+                                    None,
                                 )?
                                 .into();
 
@@ -291,6 +294,7 @@ impl OptimizerRule for PushDownAntiSemiJoin {
                             on.clone(),
                             *join_type,
                             *join_strategy,
+                            None,
                         )?
                         .into();
 
