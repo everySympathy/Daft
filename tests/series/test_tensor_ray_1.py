@@ -17,22 +17,26 @@ class MyTensorWrapper:
         self.tensor = tensor
 
 @ray.remote
-def test_serialization(wrapper):
-    return wrapper.tensor.sum()
+def bounce(wrapper):
+    return wrapper.tensor
+
 
 # obj = MyTensorWrapper(torch.ones(1024, 1024, 256))
-obj = MyTensorWrapper(torch.ones((1024, 1024, 256), dtype=torch.float32))
+tensor = torch.ones((1024, 1024, 256), dtype=torch.float32).detach().contiguous()
+obj = MyTensorWrapper(tensor)
 
-# 预热一次避免把 import/actor 启动等开销算进去
-ray.get(test_serialization.remote(obj))
+out0 = ray.get(bounce.remote(obj))
+assert out0.shape == tensor.shape
+assert out0.dtype == tensor.dtype
 
 n = 10
 start = time.perf_counter()
 for _ in range(n):
-    ray.get(test_serialization.remote(obj))
+    out = ray.get(bounce.remote(obj))
 elapsed = time.perf_counter() - start
 
-total_bytes = obj.tensor.numel() * obj.tensor.element_size() * n
+bytes_one_way = tensor.numel() * tensor.element_size()
+total_bytes = bytes_one_way * n * 2
 mbps = (total_bytes / (1024 * 1024)) / elapsed
 
-print(f"zero_copy={zero_copy} elapsed={elapsed:.3f}s throughput={mbps:.2f} MiB/s")
+print(f"zero_copy={zero_copy} elapsed={elapsed:.3f}s throughput={mbps:.2f} MiB/s total_bytes={total_bytes}")

@@ -188,3 +188,74 @@ def test_daft_tensor_transfer_like_ray_torch_tensor_script_with_sum() -> None:
         print(f"daft_tensor_sum_throughput_mib_s: {mbps:.2f}")
     finally:
         pool.teardown()
+
+"""
+DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py -k pure_transfer -s
+"""
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
+def test_daft_tensor_transfer_like_ray_torch_tensor_script_pure_transfer() -> None:
+    if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
+        pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
+
+    import ray
+
+    _init_local_ray()
+
+    shape = (1024, 1024, 256)
+    arr = np.ones(shape, dtype=np.float32)
+    mp = MicroPartition.from_pydict({"t": [arr]})
+
+    @udf(return_dtype=DataType.tensor(DataType.float32(), shape), use_process=False)
+    class Identity:
+        def __init__(self):
+            pass
+
+        def __call__(self, t):
+            return t
+
+    execution_config = PyDaftExecutionConfig.from_env()
+    resource_request = ResourceRequest(num_cpus=1)
+
+    pool = RayRoundRobinActorPool(
+        "daft-tensor-ray-equivalent-transfer",
+        1,
+        resource_request,
+        ExpressionsProjection([Identity(daft.col("t")).alias("t")]),
+        execution_config=execution_config,
+    )
+
+    ppm = PartialPartitionMetadata(num_rows=None, size_bytes=None)
+
+    pool.setup()
+    try:
+        _, warm_ref = pool.submit(partial_metadatas=[ppm], inputs=[ray.put(mp)])
+        warm_out = ray.get(warm_ref)
+        warm_arr = warm_out.to_pydict()["t"][0]
+        assert isinstance(warm_arr, np.ndarray)
+        assert warm_arr.shape == arr.shape
+        assert warm_arr.dtype == arr.dtype
+
+        n = 10
+        start = time.perf_counter()
+        last = None
+        for _ in range(n):
+            in_ref = ray.put(mp)
+            _, out_ref = pool.submit(partial_metadatas=[ppm], inputs=[in_ref])
+            last = ray.get(out_ref)
+        elapsed = time.perf_counter() - start
+
+        out_arr = last.to_pydict()["t"][0]
+        assert isinstance(out_arr, np.ndarray)
+        assert out_arr.shape == arr.shape
+        assert out_arr.dtype == arr.dtype
+
+        bytes_one_way = arr.nbytes
+        total_bytes = bytes_one_way * n * 2
+        mbps = (total_bytes / (1024 * 1024)) / elapsed
+
+        print(f"shape={shape} bytes_one_way={bytes_one_way}")
+        print(f"total_bytes: {total_bytes}")
+        print(f"elapsed: {elapsed}")
+        print(f"daft_tensor_transfer_throughput_mib_s: {mbps:.2f}")
+    finally:
+        pool.teardown()
