@@ -259,3 +259,55 @@ def test_daft_tensor_transfer_like_ray_torch_tensor_script_pure_transfer() -> No
         print(f"daft_tensor_transfer_throughput_mib_s: {mbps:.2f}")
     finally:
         pool.teardown()
+
+"""
+DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py -k daft_dataframe_actor_udf_to_actor_udf_pure_transfer -s
+RAY_ENABLE_ZERO_COPY_TORCH_TENSORS=1 DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py -k daft_dataframe_actor_udf_to_actor_udf_pure_transfer -s
+"""
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
+def test_daft_dataframe_actor_udf_to_actor_udf_pure_transfer() -> None:
+    if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
+        pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
+
+    _init_local_ray()
+
+    shape = (1024, 1024, 256)
+    arr = np.ones(shape, dtype=np.float32)
+
+    @udf(return_dtype=DataType.tensor(DataType.float32(), shape), use_process=False)
+    class Identity:
+        def __init__(self):
+            pass
+
+        def __call__(self, t):
+            return t
+
+    Identity = Identity.with_concurrency(1)
+
+    df = daft.from_pydict({"t": [arr]})
+
+    n = 10
+    expr = daft.col("t")
+    for _ in range(n):
+        expr = Identity(expr)
+
+    df2 = df.select(expr.alias("t"))
+
+
+    start = time.perf_counter()
+    out_df = df2.collect()
+    elapsed = time.perf_counter() - start
+
+    out_arr = out_df.to_pydict()["t"][0]
+    assert isinstance(out_arr, np.ndarray)
+    assert out_arr.shape == arr.shape
+    assert out_arr.dtype == arr.dtype
+
+    bytes_one_way = arr.nbytes
+    total_bytes = bytes_one_way * (n + 1)
+    mbps = (total_bytes / (1024 * 1024)) / elapsed
+
+    print(f"shape={shape} bytes_one_way={bytes_one_way}")
+    print(f"total_bytes: {total_bytes}")
+    print(f"elapsed: {elapsed}")
+    print(f"daft_dataframe_actor_udf_transfer_throughput_mib_s: {mbps:.2f}")
