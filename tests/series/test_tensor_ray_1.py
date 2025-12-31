@@ -1,5 +1,7 @@
 # RAY_ENABLE_ZERO_COPY_TORCH_TENSORS=1 python /home/wangzheyan/las-Daft/tests/series/test_tensor_ray_1.py
+# 有真正的ZeroCopyTensorsWarning:
 # RAY_ENABLE_ZERO_COPY_TORCH_TENSORS=0 python /home/wangzheyan/las-Daft/tests/series/test_tensor_ray_1.py
+# 没有，确实慢了
 
 import os
 import time

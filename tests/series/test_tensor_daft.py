@@ -190,7 +190,7 @@ def test_daft_tensor_transfer_like_ray_torch_tensor_script_with_sum() -> None:
         pool.teardown()
 
 """
-DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py -k pure_transfer -s
+DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py::test_daft_tensor_transfer_like_ray_torch_tensor_script_pure_transfer -s
 """
 @pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
 def test_daft_tensor_transfer_like_ray_torch_tensor_script_pure_transfer() -> None:
@@ -260,9 +260,86 @@ def test_daft_tensor_transfer_like_ray_torch_tensor_script_pure_transfer() -> No
     finally:
         pool.teardown()
 
+
+"""
+DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py::test_numpy_python_transfer_like_ray_pure_transfer -s
+"""
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
+def test_numpy_python_transfer_like_ray_pure_transfer() -> None:
+    if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
+        pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
+
+    import ray
+
+    from daft.series import Series
+
+    _init_local_ray()
+
+    shape = (1024, 1024, 256)
+    arr = np.ones(shape, dtype=np.float32)
+
+    mp = MicroPartition.from_pydict({"t": Series.from_pylist([arr], name="t", pyobj="force")})
+
+    @udf(return_dtype=DataType.python(), use_process=False)
+    class IdentityPy:
+        def __init__(self):
+            pass
+
+        def __call__(self, t):
+            return t
+
+    execution_config = PyDaftExecutionConfig.from_env()
+    resource_request = ResourceRequest(num_cpus=1)
+
+    pool = RayRoundRobinActorPool(
+        "numpy-python-ray-equivalent-transfer",
+        1,
+        resource_request,
+        ExpressionsProjection([IdentityPy(daft.col("t")).alias("t")]),
+        execution_config=execution_config,
+    )
+
+    ppm = PartialPartitionMetadata(num_rows=None, size_bytes=None)
+
+    pool.setup()
+    try:
+        _, warm_ref = pool.submit(partial_metadatas=[ppm], inputs=[ray.put(mp)])
+        warm_out = ray.get(warm_ref)
+        warm_val = warm_out.to_pydict()["t"][0]
+        assert isinstance(warm_val, np.ndarray)
+        assert warm_val.shape == arr.shape
+        assert warm_val.dtype == arr.dtype
+
+        n = 10
+        start = time.perf_counter()
+        last = None
+        for _ in range(n):
+            in_ref = ray.put(mp)
+            _, out_ref = pool.submit(partial_metadatas=[ppm], inputs=[in_ref])
+            last = ray.get(out_ref)
+        elapsed = time.perf_counter() - start
+
+        out_val = last.to_pydict()["t"][0]
+        assert isinstance(out_val, np.ndarray)
+        assert out_val.shape == arr.shape
+        assert out_val.dtype == arr.dtype
+
+        bytes_one_way = arr.nbytes
+        total_bytes = bytes_one_way * n * 2
+        mbps = (total_bytes / (1024 * 1024)) / elapsed
+
+        print(f"shape={shape} bytes_one_way={bytes_one_way}")
+        print(f"total_bytes: {total_bytes}")
+        print(f"elapsed: {elapsed}")
+        print(f"numpy_python_transfer_throughput_mib_s: {mbps:.2f}")
+    finally:
+        pool.teardown()
+
+
 """
 DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py -k daft_dataframe_actor_udf_to_actor_udf_pure_transfer -s
 RAY_ENABLE_ZERO_COPY_TORCH_TENSORS=1 DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py -k daft_dataframe_actor_udf_to_actor_udf_pure_transfer -s
+RAY_ENABLE_ZERO_COPY_TORCH_TENSORS=1 DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py::test_daft_dataframe_actor_udf_to_actor_udf_pure_transfer -s
 """
 @pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
 def test_daft_dataframe_actor_udf_to_actor_udf_pure_transfer() -> None:
@@ -311,3 +388,55 @@ def test_daft_dataframe_actor_udf_to_actor_udf_pure_transfer() -> None:
     print(f"total_bytes: {total_bytes}")
     print(f"elapsed: {elapsed}")
     print(f"daft_dataframe_actor_udf_transfer_throughput_mib_s: {mbps:.2f}")
+
+"""
+DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py -k test_daft_dataframe_actor_udf_to_actor_udf_pure_transfer_numpy_python -s
+RAY_ENABLE_ZERO_COPY_TORCH_TENSORS=1 DAFT_ENABLE_PERF_TESTS=1 pytest -q /home/wangzheyan/las-Daft/tests/series/test_tensor_daft.py::test_daft_dataframe_actor_udf_to_actor_udf_pure_transfer_numpy_python -s
+"""
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
+def test_daft_dataframe_actor_udf_to_actor_udf_pure_transfer_numpy_python() -> None:
+    if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
+        pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
+
+    _init_local_ray()
+
+    shape = (1024, 1024, 256)
+    arr = np.ones(shape, dtype=np.float32)
+
+    @udf(return_dtype=DataType.python(), use_process=False)
+    class IdentityPy:
+        def __init__(self):
+            pass
+
+        def __call__(self, t):
+            return t
+
+    IdentityPy = IdentityPy.with_concurrency(1)
+
+    df = daft.from_pydict({"t": [arr]})
+    df = df.select(daft.col("t").cast(DataType.python()).alias("t"))
+
+    n = 10
+    expr = daft.col("t")
+    for _ in range(n):
+        expr = IdentityPy(expr)
+
+    df2 = df.select(expr.alias("t"))
+
+    start = time.perf_counter()
+    out_df = df2.collect()
+    elapsed = time.perf_counter() - start
+
+    out_val = out_df.to_pydict()["t"][0]
+    assert isinstance(out_val, np.ndarray)
+    assert out_val.shape == arr.shape
+    assert out_val.dtype == arr.dtype
+
+    bytes_one_way = arr.nbytes
+    total_bytes = bytes_one_way * (n + 1)
+    mbps = (total_bytes / (1024 * 1024)) / elapsed
+
+    print(f"shape={shape} bytes_one_way={bytes_one_way}")
+    print(f"total_bytes: {total_bytes}")
+    print(f"elapsed: {elapsed}")
+    print(f"daft_dataframe_actor_udf_transfer_numpy_python_throughput_mib_s: {mbps:.2f}")

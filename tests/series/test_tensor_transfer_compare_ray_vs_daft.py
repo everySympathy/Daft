@@ -138,159 +138,179 @@ def test_ray_actor_to_actor_numpy_pure_transfer_put() -> None:
     print(f"ray_actor_numpy_transfer_throughput_mib_s: {mbps:.2f}")
 
 
-# """
-# DAFT_ENABLE_PERF_TESTS=1 pytest -q tests/series/test_tensor_transfer_compare_ray_vs_daft.py::test_daft_actor_pool_tensor_pure_transfer_no_put -s
-# """
-# @pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
-# def test_daft_actor_pool_tensor_pure_transfer_no_put() -> None:
-#     if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
-#         pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
+"""
+DAFT_ENABLE_PERF_TESTS=1 pytest -q tests/series/test_tensor_transfer_compare_ray_vs_daft.py::test_daft_actor_pool_tensor_pure_transfer_no_put -s
+"""
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
+def test_daft_actor_pool_tensor_pure_transfer_no_put() -> None:
+    if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
+        pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
 
-#     import ray
+    import ray
 
-#     _init_local_ray()
+    _init_local_ray()
 
-#     shape = (1024, 1024, 256)
-#     arr = np.ones(shape, dtype=np.float32)
+    shape = (1024, 1024, 256)
+    arr = np.ones(shape, dtype=np.float32)
 
-#     mp = MicroPartition.from_pydict({"t": [arr]})
+    mp = MicroPartition.from_pydict({"t": [arr]})
 
-#     @udf(return_dtype=DataType.tensor(DataType.float32(), shape), use_process=False)
-#     class Identity:
-#         def __init__(self):
-#             pass
+    # @udf(return_dtype=DataType.tensor(DataType.float32(), shape), use_process=False)
+    # class Identity:
+    #     def __init__(self):
+    #         pass
 
-#         def __call__(self, t):
-#             return t
+    #     def __call__(self, t):
+    #         return t
+    @udf(return_dtype=DataType.tensor(DataType.float32(), shape)) # slow
+    def Identity(t: np.ndarray) -> np.ndarray:
+        return t
 
-#     execution_config = PyDaftExecutionConfig.from_env()
-#     resource_request = ResourceRequest(num_cpus=1)
+    execution_config = PyDaftExecutionConfig.from_env()
+    resource_request = ResourceRequest(num_cpus=1)
 
-#     pool_1 = RayRoundRobinActorPool(
-#         "compare-daft-transfer-1",
-#         1,
-#         resource_request,
-#         ExpressionsProjection([Identity(daft.col("t")).alias("t")]),
-#         execution_config=execution_config,
-#     )
-#     pool_2 = RayRoundRobinActorPool(
-#         "compare-daft-transfer-2",
-#         1,
-#         resource_request,
-#         ExpressionsProjection([Identity(daft.col("t")).alias("t")]),
-#         execution_config=execution_config,
-#     )
+    pool_1 = RayRoundRobinActorPool(
+        "compare-daft-transfer-1",
+        1,
+        resource_request,
+        ExpressionsProjection([Identity(daft.col("t")).alias("t")]),
+        execution_config=execution_config,
+    )
+    pool_2 = RayRoundRobinActorPool(
+        "compare-daft-transfer-2",
+        1,
+        resource_request,
+        ExpressionsProjection([Identity(daft.col("t")).alias("t")]),
+        execution_config=execution_config,
+    )
 
-#     ppm = PartialPartitionMetadata(num_rows=None, size_bytes=None)
+    ppm = PartialPartitionMetadata(num_rows=None, size_bytes=None)
 
-#     pool_1.setup()
-#     pool_2.setup()
-#     try:
-#         cur_ref = ray.put(mp)
+    pool_1.setup()
+    pool_2.setup()
+    try:
+        cur_ref = ray.put(mp)
 
-#         # _, warm_ref = pool_1.submit(partial_metadatas=[ppm], inputs=[cur_ref])
-#         # warm_out = ray.get(warm_ref)
-#         # warm_arr = warm_out.to_pydict()["t"][0]
-#         # assert isinstance(warm_arr, np.ndarray)
-#         # assert warm_arr.shape == arr.shape
-#         # assert warm_arr.dtype == arr.dtype
+        # _, warm_ref = pool_1.submit(partial_metadatas=[ppm], inputs=[cur_ref])
+        # warm_out = ray.get(warm_ref)
+        # warm_arr = warm_out.to_pydict()["t"][0]
+        # assert isinstance(warm_arr, np.ndarray)
+        # assert warm_arr.shape == arr.shape
+        # assert warm_arr.dtype == arr.dtype
 
-#         hops = 10
-#         start = time.perf_counter()
-#         for i in range(hops):
-#             pool = pool_1 if i % 2 == 0 else pool_2
-#             _, cur_ref = pool.submit(partial_metadatas=[ppm], inputs=[cur_ref])
-#         out = ray.get(cur_ref)
-#         elapsed = time.perf_counter() - start
+        hops = 10
+        start = time.perf_counter()
+        for i in range(hops):
+            pool = pool_1 if i % 2 == 0 else pool_2
+            _, cur_ref = pool.submit(partial_metadatas=[ppm], inputs=[cur_ref])
+        out = ray.get(cur_ref)
+        elapsed = time.perf_counter() - start
 
-#         out_arr = out.to_pydict()["t"][0]
-#         assert isinstance(out_arr, np.ndarray)
-#         assert out_arr.shape == arr.shape
-#         assert out_arr.dtype == arr.dtype
+        out_arr = out.to_pydict()["t"][0]
+        assert isinstance(out_arr, np.ndarray)
+        assert out_arr.shape == arr.shape
+        assert out_arr.dtype == arr.dtype
 
-#         bytes_one_way = arr.nbytes
-#         total_bytes = bytes_one_way * hops * 2
-#         mbps = (total_bytes / (1024 * 1024)) / elapsed
+        bytes_one_way = arr.nbytes
+        total_bytes = bytes_one_way * hops * 2
+        mbps = (total_bytes / (1024 * 1024)) / elapsed
 
-#         print(f"shape={shape} bytes_one_way={bytes_one_way}")
-#         print(f"total_bytes: {total_bytes}")
-#         print(f"elapsed: {elapsed}")
-#         print(f"daft_actor_pool_tensor_transfer_throughput_mib_s: {mbps:.2f}")
-#     finally:
-#         pool_1.teardown()
-#         pool_2.teardown()
+        print(f"shape={shape} bytes_one_way={bytes_one_way}")
+        print(f"total_bytes: {total_bytes}")
+        print(f"elapsed: {elapsed}")
+        print(f"daft_actor_pool_tensor_transfer_throughput_mib_s: {mbps:.2f}")
+    finally:
+        pool_1.teardown()
+        pool_2.teardown()
 
 
-# @pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
-# def test_daft_actor_pool_numpy_python_pure_transfer_no_put() -> None:
-#     if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
-#         pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
+"""
+DAFT_ENABLE_PERF_TESTS=1 pytest -q tests/series/test_tensor_transfer_compare_ray_vs_daft.py::test_daft_actor_pool_numpy_python_pure_transfer_no_put -s
+"""
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray runner")
+def test_daft_actor_pool_numpy_python_pure_transfer_no_put() -> None:
+    if os.getenv("DAFT_ENABLE_PERF_TESTS") != "1":
+        pytest.skip("set DAFT_ENABLE_PERF_TESTS=1 to enable perf-style tests")
 
-#     import ray
+    import ray
 
-#     from daft.series import Series
+    from daft.series import Series
 
-#     _init_local_ray()
+    _init_local_ray()
 
-#     shape = (1024, 1024, 256)
-#     arr = np.ones(shape, dtype=np.float32)
+    shape = (1024, 1024, 256)
+    arr = np.ones(shape, dtype=np.float32)
 
-#     mp = MicroPartition.from_pydict({"t": Series.from_pylist([arr], name="t", pyobj="force")})
+    mp = MicroPartition.from_pydict({"t": Series.from_pylist([arr], name="t", pyobj="force")})
 
-#     @udf(return_dtype=DataType.python(), use_process=False)
-#     class IdentityPy:
-#         def __init__(self):
-#             pass
+    # @udf(return_dtype=DataType.float32(), use_process=False)
+    # @udf(return_dtype=DataType.tensor(DataType.float32(), shape), use_process=False) slow
+    # @udf(return_dtype=DataType.python(), use_process=False) # slow
+    # class IdentityPy:
+    #     def __init__(self):
+    #         pass
 
-#         def __call__(self, t):
-#             return t
+    #     def __call__(self, t):
+    #         return t
 
-#     execution_config = PyDaftExecutionConfig.from_env()
-#     resource_request = ResourceRequest(num_cpus=1)
+    @udf(return_dtype=DataType.tensor(DataType.float32(), shape)) # slow
+    def IdentityPy(t: np.ndarray) -> np.ndarray:
+        return t
 
-#     pool_1 = RayRoundRobinActorPool(
-#         "compare-daft-numpy-python-transfer-1",
-#         1,
-#         resource_request,
-#         ExpressionsProjection([IdentityPy(daft.col("t")).alias("t")]),
-#         execution_config=execution_config,
-#     )
-#     pool_2 = RayRoundRobinActorPool(
-#         "compare-daft-numpy-python-transfer-2",
-#         1,
-#         resource_request,
-#         ExpressionsProjection([IdentityPy(daft.col("t")).alias("t")]),
-#         execution_config=execution_config,
-#     )
+    # @daft.cls
+    # class IdentityPy:
+    #     def __init__(self):
+    #         pass
 
-#     ppm = PartialPartitionMetadata(num_rows=None, size_bytes=None)
+    #     def __call__(self, t):
+    #         return t
 
-#     pool_1.setup()
-#     pool_2.setup()
-#     try:
-#         cur_ref = ray.put(mp)
+    execution_config = PyDaftExecutionConfig.from_env()
+    resource_request = ResourceRequest(num_cpus=1)
 
-#         hops = 10
-#         start = time.perf_counter()
-#         for i in range(hops):
-#             pool = pool_1 if i % 2 == 0 else pool_2
-#             _, cur_ref = pool.submit(partial_metadatas=[ppm], inputs=[cur_ref])
-#         out = ray.get(cur_ref)
-#         elapsed = time.perf_counter() - start
+    pool_1 = RayRoundRobinActorPool(
+        "compare-daft-numpy-python-transfer-1",
+        1,
+        resource_request,
+        ExpressionsProjection([IdentityPy(daft.col("t")).alias("t")]),
+        execution_config=execution_config,
+    )
+    pool_2 = RayRoundRobinActorPool(
+        "compare-daft-numpy-python-transfer-2",
+        1,
+        resource_request,
+        ExpressionsProjection([IdentityPy(daft.col("t")).alias("t")]),
+        execution_config=execution_config,
+    )
 
-#         out_val = out.to_pydict()["t"][0]
-#         assert isinstance(out_val, np.ndarray)
-#         assert out_val.shape == arr.shape
-#         assert out_val.dtype == arr.dtype
+    ppm = PartialPartitionMetadata(num_rows=None, size_bytes=None)
 
-#         bytes_one_way = arr.nbytes
-#         total_bytes = bytes_one_way * hops * 2
-#         mbps = (total_bytes / (1024 * 1024)) / elapsed
+    pool_1.setup()
+    pool_2.setup()
+    try:
+        cur_ref = ray.put(mp)
 
-#         print(f"shape={shape} bytes_one_way={bytes_one_way}")
-#         print(f"total_bytes: {total_bytes}")
-#         print(f"elapsed: {elapsed}")
-#         print(f"daft_actor_pool_numpy_python_transfer_throughput_mib_s: {mbps:.2f}")
-#     finally:
-#         pool_1.teardown()
-#         pool_2.teardown()
+        hops = 10
+        start = time.perf_counter()
+        for i in range(hops):
+            pool = pool_1 if i % 2 == 0 else pool_2
+            _, cur_ref = pool.submit(partial_metadatas=[ppm], inputs=[cur_ref])
+        out = ray.get(cur_ref)
+        elapsed = time.perf_counter() - start
+
+        out_val = out.to_pydict()["t"][0]
+        assert isinstance(out_val, np.ndarray)
+        assert out_val.shape == arr.shape
+        assert out_val.dtype == arr.dtype
+
+        bytes_one_way = arr.nbytes
+        total_bytes = bytes_one_way * hops * 2
+        mbps = (total_bytes / (1024 * 1024)) / elapsed
+
+        print(f"shape={shape} bytes_one_way={bytes_one_way}")
+        print(f"total_bytes: {total_bytes}")
+        print(f"elapsed: {elapsed}")
+        print(f"daft_actor_pool_numpy_python_transfer_throughput_mib_s: {mbps:.2f}")
+    finally:
+        pool_1.teardown()
+        pool_2.teardown()
