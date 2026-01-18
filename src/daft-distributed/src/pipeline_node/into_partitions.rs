@@ -241,9 +241,34 @@ impl IntoPartitionsNode {
 
         match num_input_tasks.cmp(&self.num_partitions) {
             std::cmp::Ordering::Equal => {
-                // Exact match - pass through as-is
-                for task in input_tasks {
-                    let _ = result_tx.send(task).await;
+                if self
+                    .config
+                    .execution_config
+                    .enable_scan_task_split_and_merge
+                {
+                    let node_id = self.node_id();
+                    for task in input_tasks {
+                        let into_partitions_task = append_plan_to_existing_task(
+                            task,
+                            &(self.clone() as Arc<dyn PipelineNodeImpl>),
+                            &move |plan| {
+                                LocalPhysicalPlan::into_partitions(
+                                    plan,
+                                    1,
+                                    StatsState::NotMaterialized,
+                                    LocalNodeContext {
+                                        origin_node_id: Some(node_id as usize),
+                                        additional: None,
+                                    },
+                                )
+                            },
+                        );
+                        let _ = result_tx.send(into_partitions_task).await;
+                    }
+                } else {
+                    for task in input_tasks {
+                        let _ = result_tx.send(task).await;
+                    }
                 }
             }
             std::cmp::Ordering::Greater => {
