@@ -92,6 +92,10 @@ def _prepare_checkpoint_filter(
     num_cpus: float,
     read_fn: Callable[..., DataFrame],
     read_kwargs: dict[str, Any] | None = None,
+    enable_scan_task_split_and_merge: bool | None = None,
+    scan_tasks_min_size_bytes: int | None = None,
+    scan_tasks_max_size_bytes: int | None = None,
+    max_sources_per_scan_task: int | None = None,
 ) -> tuple[list[ActorHandle], PlacementGroup | None, Expression | None]:
     """Build and return checkpoint resources.
 
@@ -113,10 +117,18 @@ def _prepare_checkpoint_filter(
 
     df_keys = None
     try:
-        df_keys = read_fn(path=root_dirs_str, io_config=io_config, **(read_kwargs or {}))
-        if key_column:
-            df_keys = df_keys.select(key_column)
-        partition_list = list(df_keys.iter_partitions())
+        from daft.context import execution_config_ctx
+
+        with execution_config_ctx(
+            enable_scan_task_split_and_merge=enable_scan_task_split_and_merge,
+            scan_tasks_min_size_bytes=scan_tasks_min_size_bytes,
+            scan_tasks_max_size_bytes=scan_tasks_max_size_bytes,
+            max_sources_per_scan_task=max_sources_per_scan_task,
+        ):
+            df_keys = read_fn(path=root_dirs_str, io_config=io_config, **(read_kwargs or {}))
+            if key_column:
+                df_keys = df_keys.select(key_column)
+            partition_list = list(df_keys.iter_partitions())
     except FileNotFoundError as e:
         raise RuntimeError(f"Resume checkpoint not found at {root_dirs_str}: {e}") from e
     except Exception as e:

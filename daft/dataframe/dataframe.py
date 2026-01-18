@@ -2345,6 +2345,10 @@ class DataFrame:
         num_buckets: int | None = None,
         num_cpus: float | None = None,
         batch_size: int | None = None,
+        enable_scan_task_split_and_merge: bool | None = None,
+        scan_tasks_min_size_bytes: int | None = None,
+        scan_tasks_max_size_bytes: int | None = None,
+        max_sources_per_scan_task: int | None = None,
         **reader_args: Any,
     ) -> "DataFrame":
         if isinstance(on, str):
@@ -2399,6 +2403,10 @@ class DataFrame:
             num_buckets=num_buckets,
             num_cpus=num_cpus,
             batch_size=batch_size,
+            enable_scan_task_split_and_merge=enable_scan_task_split_and_merge,
+            scan_tasks_min_size_bytes=scan_tasks_min_size_bytes,
+            scan_tasks_max_size_bytes=scan_tasks_max_size_bytes,
+            max_sources_per_scan_task=max_sources_per_scan_task,
         )
         return DataFrame(builder)
 

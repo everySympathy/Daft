@@ -531,6 +531,10 @@ def _maybe_apply_resume_checkpoint(builder: LogicalPlanBuilder) -> tuple[Logical
             num_buckets = spec.get("num_buckets")
             num_cpus = spec.get("num_cpus")
             read_kwargs = spec.get("read_kwargs")
+            enable_scan_task_split_and_merge = spec.get("enable_scan_task_split_and_merge")
+            scan_tasks_min_size_bytes = spec.get("scan_tasks_min_size_bytes")
+            scan_tasks_max_size_bytes = spec.get("scan_tasks_max_size_bytes")
+            max_sources_per_scan_task = spec.get("max_sources_per_scan_task")
 
             read_fn: Callable[..., DataFrame]
             if file_format == FileFormat.Parquet:
@@ -556,6 +560,10 @@ def _maybe_apply_resume_checkpoint(builder: LogicalPlanBuilder) -> tuple[Logical
                 num_cpus=1 if num_cpus is None else num_cpus,
                 read_fn=read_fn,
                 read_kwargs=read_kwargs,
+                enable_scan_task_split_and_merge=enable_scan_task_split_and_merge,
+                scan_tasks_min_size_bytes=scan_tasks_min_size_bytes,
+                scan_tasks_max_size_bytes=scan_tasks_max_size_bytes,
+                max_sources_per_scan_task=max_sources_per_scan_task,
             )
             cleanup_items.append((actor_handles, placement_group))
             predicates.append(checkpoint_filter_expr)

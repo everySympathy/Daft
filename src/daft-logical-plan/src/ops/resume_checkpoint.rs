@@ -23,6 +23,10 @@ pub struct ResumeCheckpointSpec {
     pub num_buckets: Option<usize>,
     pub num_cpus: Option<FloatWrapper<f64>>,
     pub batch_size: Option<usize>,
+    pub enable_scan_task_split_and_merge: Option<bool>,
+    pub scan_tasks_min_size_bytes: Option<usize>,
+    pub scan_tasks_max_size_bytes: Option<usize>,
+    pub max_sources_per_scan_task: Option<usize>,
     #[cfg(feature = "python")]
     pub read_kwargs: PyObjectWrapper,
 }
@@ -39,6 +43,10 @@ impl ResumeCheckpointSpec {
         num_buckets: Option<usize>,
         num_cpus: Option<f64>,
         batch_size: Option<usize>,
+        enable_scan_task_split_and_merge: Option<bool>,
+        scan_tasks_min_size_bytes: Option<usize>,
+        scan_tasks_max_size_bytes: Option<usize>,
+        max_sources_per_scan_task: Option<usize>,
     ) -> DaftResult<Self> {
         if root_dir.is_empty() || root_dir.iter().any(|p| p.is_empty()) {
             return Err(DaftError::ValueError(
@@ -75,6 +83,10 @@ impl ResumeCheckpointSpec {
             num_buckets,
             num_cpus: num_cpus.map(FloatWrapper),
             batch_size,
+            enable_scan_task_split_and_merge,
+            scan_tasks_min_size_bytes,
+            scan_tasks_max_size_bytes,
+            max_sources_per_scan_task,
         })
     }
 
@@ -88,6 +100,10 @@ impl ResumeCheckpointSpec {
         num_buckets: Option<usize>,
         num_cpus: Option<f64>,
         batch_size: Option<usize>,
+        enable_scan_task_split_and_merge: Option<bool>,
+        scan_tasks_min_size_bytes: Option<usize>,
+        scan_tasks_max_size_bytes: Option<usize>,
+        max_sources_per_scan_task: Option<usize>,
     ) -> DaftResult<Self> {
         if root_dir.is_empty() || root_dir.iter().any(|p| p.is_empty()) {
             return Err(DaftError::ValueError(
@@ -123,6 +139,10 @@ impl ResumeCheckpointSpec {
             num_buckets,
             num_cpus: num_cpus.map(FloatWrapper),
             batch_size,
+            enable_scan_task_split_and_merge,
+            scan_tasks_min_size_bytes,
+            scan_tasks_max_size_bytes,
+            max_sources_per_scan_task,
         })
     }
 }
@@ -221,6 +241,10 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -228,6 +252,10 @@ mod tests {
             vec!["root2".to_string()],
             FileFormat::Csv,
             "id".to_string(),
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -274,6 +302,10 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
             )
             .unwrap();
 
@@ -286,6 +318,10 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
             )
             .unwrap();
 
@@ -295,6 +331,10 @@ mod tests {
                 "id".to_string(),
                 None,
                 kwargs_c,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -344,6 +384,10 @@ mod tests {
                 None,
                 None,
                 Some(10),
+                None,
+                None,
+                None,
+                None,
             )?;
             scan_builder.resume_checkpoint(spec)
         })?;
@@ -358,6 +402,10 @@ mod tests {
                 None,
                 None,
                 Some(10),
+                None,
+                None,
+                None,
+                None,
             )?;
             scan_builder.resume_checkpoint(spec)?
         };
@@ -399,6 +447,10 @@ mod tests {
             None,
             None,
             Some(10),
+            None,
+            None,
+            None,
+            None,
         )?;
 
         let plan = scan_builder.resume_checkpoint(spec)?.build();

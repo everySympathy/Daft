@@ -382,6 +382,25 @@ def test_resume_csv_reader_args_applied(tmp_path: Path):
 
 
 @pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray Runner to be in use")
+def test_resume_execution_config_overrides_applied_to_checkpoint_read(tmp_path: Path):
+    ckpt_dir = tmp_path / "ckpt_csv"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    (ckpt_dir / "part-0.csv").write_text("id\n1\n2\n", encoding="utf-8")
+
+    df = daft.from_pydict({"id": [1, 2, 3]})
+    out = df.resume(
+        ckpt_dir,
+        on="id",
+        format="csv",
+        enable_scan_task_split_and_merge=False,
+        scan_tasks_min_size_bytes=1,
+        scan_tasks_max_size_bytes=1024,
+        max_sources_per_scan_task=1,
+    ).collect()
+    assert out.select("id").to_pydict()["id"] == [3]
+
+
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray Runner to be in use")
 def test_resume_batch_size_visible_in_explain(tmp_path: Path):
     root_dir = tmp_path / "out"
     seed_df = daft.from_pydict({"id": [1, 2], "val": ["a", "b"]})

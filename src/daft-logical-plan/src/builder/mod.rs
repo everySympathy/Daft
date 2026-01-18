@@ -1242,7 +1242,7 @@ impl PyLogicalPlanBuilder {
         Ok(self.builder.filter(predicate.expr)?.into())
     }
 
-    #[pyo3(signature = (root_dir, file_format, key_column, io_config=None, read_kwargs=None, num_buckets=None, num_cpus=None, batch_size=None))]
+    #[pyo3(signature = (root_dir, file_format, key_column, io_config=None, read_kwargs=None, num_buckets=None, num_cpus=None, batch_size=None, enable_scan_task_split_and_merge=None, scan_tasks_min_size_bytes=None, scan_tasks_max_size_bytes=None, max_sources_per_scan_task=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn resume_checkpoint(
         &self,
@@ -1255,6 +1255,10 @@ impl PyLogicalPlanBuilder {
         num_buckets: Option<usize>,
         num_cpus: Option<f64>,
         batch_size: Option<usize>,
+        enable_scan_task_split_and_merge: Option<bool>,
+        scan_tasks_min_size_bytes: Option<usize>,
+        scan_tasks_max_size_bytes: Option<usize>,
+        max_sources_per_scan_task: Option<usize>,
     ) -> PyResult<Self> {
         let root_dirs: Vec<String> = if let Ok(s) = root_dir.extract::<String>(py) {
             vec![s]
@@ -1272,6 +1276,10 @@ impl PyLogicalPlanBuilder {
             num_buckets,
             num_cpus,
             batch_size,
+            enable_scan_task_split_and_merge,
+            scan_tasks_min_size_bytes,
+            scan_tasks_max_size_bytes,
+            max_sources_per_scan_task,
         )?;
         Ok(self.builder.resume_checkpoint(spec)?.into())
     }
@@ -1330,6 +1338,13 @@ impl PyLogicalPlanBuilder {
                 d.set_item("num_buckets", spec.num_buckets)?;
                 d.set_item("num_cpus", spec.num_cpus.as_ref().map(|v| v.0))?;
                 d.set_item("batch_size", spec.batch_size)?;
+                d.set_item(
+                    "enable_scan_task_split_and_merge",
+                    spec.enable_scan_task_split_and_merge,
+                )?;
+                d.set_item("scan_tasks_min_size_bytes", spec.scan_tasks_min_size_bytes)?;
+                d.set_item("scan_tasks_max_size_bytes", spec.scan_tasks_max_size_bytes)?;
+                d.set_item("max_sources_per_scan_task", spec.max_sources_per_scan_task)?;
                 Ok(d.into())
             })
             .collect()
