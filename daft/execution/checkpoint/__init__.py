@@ -128,6 +128,7 @@ def _prepare_checkpoint_filter(
             df_keys = read_fn(path=root_dirs_str, io_config=io_config, **(read_kwargs or {}))
             if key_column:
                 df_keys = df_keys.select(key_column)
+            df_keys = df_keys.into_partitions(df_keys.num_partitions())
             partition_list = list(df_keys.iter_partitions())
     except FileNotFoundError as e:
         raise RuntimeError(f"Resume checkpoint not found at {root_dirs_str}: {e}") from e
