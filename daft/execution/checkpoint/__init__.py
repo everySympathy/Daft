@@ -318,20 +318,12 @@ def _prepare_checkpoint_filter(
         num_cpus,
     )
 
-    # Read existing keys dataframe and extract partitions
+    # Build df_keys lazily; execution config for scan split/merge is applied at collect-time.
     df_keys = None
     try:
-        from daft.context import execution_config_ctx
-
-        with execution_config_ctx(
-            enable_scan_task_split_and_merge=enable_scan_task_split_and_merge,
-            max_sources_per_scan_task=max_sources_per_scan_task,
-            scan_tasks_max_size_bytes=scan_tasks_max_size_bytes,
-            scan_tasks_min_size_bytes=scan_tasks_min_size_bytes,
-        ):
-            df_keys = read_fn(path=str(root_dir), io_config=io_config)
-            if key_column:
-                df_keys = df_keys.select(key_column)
+        df_keys = read_fn(path=str(root_dir), io_config=io_config)
+        if key_column:
+            df_keys = df_keys.select(key_column)
     except FileNotFoundError as e:
         warnings.warn(
             f"{root_dir} not found, checkpointing will not be supported because it's unnecessary. message: {e}"
@@ -424,7 +416,14 @@ def _prepare_checkpoint_filter(
 
             return Series.from_arrow(pa.nulls(num_rows))
 
-        df_keys.select(ingest_keys(col(key_column))).collect()
+        from daft.context import execution_config_ctx
+        with execution_config_ctx(
+            enable_scan_task_split_and_merge=enable_scan_task_split_and_merge,
+            max_sources_per_scan_task=max_sources_per_scan_task,
+            scan_tasks_max_size_bytes=scan_tasks_max_size_bytes,
+            scan_tasks_min_size_bytes=scan_tasks_min_size_bytes,
+        ):
+            df_keys.select(ingest_keys(col(key_column))).collect()
     except Exception as e:
         logger.exception("Failed to create all checkpoint actors")
         _cleanup_checkpoint_resources(actor_handles, pg)
