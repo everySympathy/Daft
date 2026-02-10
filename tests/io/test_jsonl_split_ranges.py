@@ -31,6 +31,22 @@ def test_jsonl_split_local_equals_unsplit(tmp_path):
     assert df_unsplit.count_rows() == df_split.count_rows() == 10000
 
 
+def test_jsonl_split_uses_chunk_size_override(tmp_path):
+    jsonl_path = tmp_path / "test-split-chunk-override.jsonl"
+    with jsonl_path.open("w", encoding="utf-8") as f:
+        for i in range(20000):
+            f.write(f'{{"id": {i}, "value": {i * 2}, "name": "item_{i}"}}\n')
+
+    with daft.context.execution_config_ctx(
+        enable_scan_task_split_and_merge=True,
+        scan_tasks_min_size_bytes=1,
+        scan_tasks_max_size_bytes=1024 * 1024 * 1024,
+    ):
+        df = daft.read_json(str(jsonl_path), _chunk_size=4 * 1024)
+        assert df.num_partitions() > 1
+        assert df.count_rows() == 20000
+
+
 def test_local_multiple_jsonl_files_partitions(tmp_path):
     # Build multiple JSONL files and ensure multiple partitions
     paths = []
