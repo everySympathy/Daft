@@ -15,7 +15,7 @@ use futures::{
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use snafu::{
     ResultExt,
-    futures::{TryFutureExt, TryStreamExt as _, try_future::Context},
+    futures::{TryFutureExt, try_future::Context},
 };
 use tokio::{
     fs::File,
@@ -25,7 +25,7 @@ use tokio::{
 use tokio_util::io::StreamReader;
 
 use crate::{
-    ArrowSnafu, ChunkSnafu, JoinSnafu, JsonConvertOptions, JsonParseOptions, JsonReadOptions,
+    ArrowSnafu, JoinSnafu, JsonConvertOptions, JsonParseOptions, JsonReadOptions, StdIOSnafu,
     decoding::deserialize_records,
     local::{read_json_array_impl, read_json_local},
     schema::read_json_schema_single,
@@ -574,12 +574,48 @@ where
     R: AsyncBufRead + Unpin + Send + 'static,
 {
     let num_rows = num_rows.unwrap_or(usize::MAX);
-    // Stream of unparsed json string record chunks.
-    let line_stream = tokio_stream::wrappers::LinesStream::new(reader.lines());
-    line_stream
-        .take(num_rows)
-        .try_chunks(chunk_size)
-        .context(ChunkSnafu)
+    let chunk_size = chunk_size.max(1);
+    futures::stream::try_unfold(
+        (reader, 0usize),
+        move |(mut reader, mut total_rows_read)| async move {
+            if total_rows_read >= num_rows {
+                return Ok(None);
+            }
+
+            let mut records: Vec<String> = Vec::new();
+            let mut bytes_in_chunk: usize = 0;
+            let mut line = String::new();
+
+            while total_rows_read < num_rows {
+                line.clear();
+                let bytes_read = reader.read_line(&mut line).await.context(StdIOSnafu)?;
+                if bytes_read == 0 {
+                    break;
+                }
+
+                if line.ends_with('\n') {
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                }
+
+                bytes_in_chunk = bytes_in_chunk.saturating_add(line.len());
+                total_rows_read = total_rows_read.saturating_add(1);
+                records.push(std::mem::take(&mut line));
+
+                if bytes_in_chunk >= chunk_size {
+                    break;
+                }
+            }
+
+            if records.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some((records, (reader, total_rows_read))))
+            }
+        },
+    )
 }
 
 fn parse_into_column_array_chunk_stream(
@@ -649,6 +685,7 @@ mod tests {
     };
     use daft_io::{IOClient, IOConfig};
     use daft_recordbatch::RecordBatch;
+    use futures::TryStreamExt;
     use indexmap::IndexMap;
     use rstest::rstest;
 
@@ -841,6 +878,33 @@ mod tests {
         check_equal_local_arrow2(file.as_ref(), &table, None, None);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_streaming_chunk_size_is_bytes() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let chunks = rt
+            .block_on(async {
+                let data = b"{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n";
+                let (mut w, r) = tokio::io::duplex(1024);
+                tokio::spawn(async move {
+                    use tokio::io::AsyncWriteExt;
+                    w.write_all(&data[..]).await.unwrap();
+                    w.shutdown().await.unwrap();
+                });
+                let reader = tokio::io::BufReader::new(r);
+                let stream = super::read_into_line_chunk_stream(reader, None, 14);
+                stream.try_collect::<Vec<_>>().await
+            })
+            .unwrap();
+
+        assert_eq!(
+            chunks,
+            vec![
+                vec!["{\"a\":1}".to_string(), "{\"a\":2}".to_string()],
+                vec!["{\"a\":3}".to_string()],
+            ]
+        );
     }
 
     #[test]
