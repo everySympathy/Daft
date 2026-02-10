@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import json
 import os
 import pathlib
@@ -10,6 +11,7 @@ from typing import Any
 import pytest
 
 import daft
+from daft.daft import JsonReadOptions
 from daft.datatype import DataType
 from daft.logical.schema import Schema
 from daft.recordbatch import MicroPartition, recordbatch_io
@@ -136,3 +138,33 @@ def test_json_read_data_select_columns():
         )
         table = recordbatch_io.read_json(f, schema, read_options=TableReadOptions(column_names=["data"]))
         assert table.to_arrow() == expected.to_arrow(), f"Expected:\n{expected}\n\nReceived:\n{table}"
+
+
+def test_json_read_chunk_size_is_bytes_end_to_end():
+    with tempfile.TemporaryDirectory() as directory_name:
+        file_path = os.path.join(directory_name, "tempfile.jsonl.gz")
+        with gzip.open(file_path, "wt", encoding="utf-8", newline="") as f:
+            f.write('{"a":1}\n')
+            f.write('{"a":2}\n')
+            f.write('{"a":3}\n')
+
+        schema = Schema._from_field_name_and_types([("a", DataType.int64())])
+        table = recordbatch_io.read_json(file_path, schema, json_read_options=JsonReadOptions(chunk_size=14))
+
+        batches = table.get_record_batches()
+        assert [len(b) for b in batches] == [2, 1]
+
+
+def test_json_read_emits_multiple_record_batches():
+    with tempfile.TemporaryDirectory() as directory_name:
+        file_path = os.path.join(directory_name, "tempfile.jsonl")
+        with open(file_path, "w", encoding="utf-8", newline="") as f:
+            for i in range(200):
+                f.write(f'{{"a":{i}}}\n')
+
+        schema = Schema._from_field_name_and_types([("a", DataType.int64())])
+        table = recordbatch_io.read_json(file_path, schema, json_read_options=JsonReadOptions(chunk_size=64))
+
+        batches = table.get_record_batches()
+        assert len(batches) > 1
+        assert sum(len(b) for b in batches) == 200
