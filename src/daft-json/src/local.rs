@@ -30,6 +30,23 @@ pub fn read_json_local(
     read_options: Option<JsonReadOptions>,
     max_chunks_in_flight: Option<usize>,
 ) -> DaftResult<RecordBatch> {
+    let tables = read_json_local_into_tables(
+        uri,
+        convert_options,
+        parse_options,
+        read_options,
+        max_chunks_in_flight,
+    )?;
+    tables_concat(tables)
+}
+
+pub fn read_json_local_into_tables(
+    uri: &str,
+    convert_options: Option<JsonConvertOptions>,
+    parse_options: Option<JsonParseOptions>,
+    read_options: Option<JsonReadOptions>,
+    max_chunks_in_flight: Option<usize>,
+) -> DaftResult<Vec<RecordBatch>> {
     let uri = uri.trim_start_matches("file://");
     let file = std::fs::File::open(uri)?;
     // SAFETY: mmapping is inherently unsafe.
@@ -42,7 +59,7 @@ pub fn read_json_local(
             .as_ref()
             .and_then(|c| c.schema.as_ref())
             .map_or_else(|| Schema::empty().into(), |s| s.clone());
-        return Ok(RecordBatch::empty(Some(schema)));
+        return Ok(vec![RecordBatch::empty(Some(schema))]);
     }
 
     if bytes.is_empty() {
@@ -57,7 +74,7 @@ pub fn read_json_local(
         let predicate = convert_options
             .as_ref()
             .and_then(|options| options.predicate.clone());
-        read_json_array_impl(bytes, schema.into(), predicate)
+        Ok(vec![read_json_array_impl(bytes, schema.into(), predicate)?])
     } else {
         let reader = JsonReader::try_new(
             bytes,
@@ -66,7 +83,7 @@ pub fn read_json_local(
             read_options,
             max_chunks_in_flight,
         )?;
-        reader.finish()
+        reader.finish_into_tables()
     }
 }
 
@@ -226,7 +243,7 @@ impl<'a> JsonReader<'a> {
         })
     }
 
-    pub fn finish(&self) -> DaftResult<RecordBatch> {
+    pub fn finish_into_tables(&self) -> DaftResult<Vec<RecordBatch>> {
         let mut bytes = self.bytes;
         let mut n_threads = self.n_threads;
         let mut total_rows = 128;
@@ -253,32 +270,44 @@ impl<'a> JsonReader<'a> {
         }
 
         let total_len = bytes.len();
-        let chunk_size = self.chunk_size.unwrap_or_else(|| total_len / n_threads);
-        let file_chunks = self.get_file_chunks(bytes, n_threads, total_len, chunk_size);
+        let chunk_size = self
+            .chunk_size
+            .unwrap_or_else(|| total_len / n_threads.max(1));
+        let file_chunks = self.get_file_chunks(bytes, total_len, chunk_size);
 
-        let tbls = self.pool.install(|| {
+        let mut tbls = self.pool.install(|| {
             file_chunks
                 .into_par_iter()
                 .map(|(start, stop)| {
                     let chunk = &bytes[start..stop];
-                    self.parse_json_chunk(chunk, chunk_size)
+                    self.parse_json_chunk(chunk)
                 })
                 .collect::<DaftResult<Vec<RecordBatch>>>()
         })?;
 
-        let tbl = tables_concat(tbls)?;
-
-        // The `limit` is not guaranteed to be fully applied from the byte slice, so we need to properly apply the limit after concatenating the tables
-        if let Some(limit) = self.n_rows
-            && tbl.len() > limit
-        {
-            return tbl.head(limit);
+        if let Some(limit) = self.n_rows {
+            let mut out = Vec::new();
+            let mut remaining = limit;
+            for table in tbls {
+                if remaining == 0 {
+                    break;
+                }
+                let table_len = table.len();
+                if table_len <= remaining {
+                    remaining -= table_len;
+                    out.push(table);
+                } else {
+                    out.push(table.head(remaining)?);
+                    break;
+                }
+            }
+            tbls = out;
         }
-        Ok(tbl)
+        Ok(tbls)
     }
 
     #[allow(deprecated, reason = "arrow2 migration")]
-    fn parse_json_chunk(&self, bytes: &[u8], chunk_size: usize) -> DaftResult<RecordBatch> {
+    fn parse_json_chunk(&self, bytes: &[u8]) -> DaftResult<RecordBatch> {
         let mut scratch = vec![];
         let scratch = &mut scratch;
 
@@ -293,10 +322,21 @@ impl<'a> JsonReader<'a> {
         let iter =
             serde_json::Deserializer::from_slice(bytes).into_iter::<&serde_json::value::RawValue>();
 
+        let mut estimated_rows = memchr::memchr_iter(NEWLINE, bytes).count();
+        if bytes.last().copied() != Some(NEWLINE) && !bytes.is_empty() {
+            estimated_rows = estimated_rows.saturating_add(1);
+        }
+        estimated_rows = estimated_rows.max(1);
+
         let mut columns = arrow_schema
             .fields
             .iter()
-            .map(|f| (Cow::Owned(f.name.clone()), allocate_array(f, chunk_size)))
+            .map(|f| {
+                (
+                    Cow::Owned(f.name.clone()),
+                    allocate_array(f, estimated_rows),
+                )
+            })
             .collect::<IndexMap<_, _>>();
 
         let mut num_rows = 0;
@@ -352,36 +392,32 @@ impl<'a> JsonReader<'a> {
     fn get_file_chunks(
         &self,
         bytes: &[u8],
-        n_threads: usize,
         total_len: usize,
         chunk_size: usize,
     ) -> Vec<(usize, usize)> {
         let mut last_pos = 0;
+        let chunk_size = chunk_size.max(1);
 
-        let (n_chunks, chunk_size) = calculate_chunks_and_size(n_threads, chunk_size, total_len);
-
-        let mut offsets = Vec::with_capacity(n_chunks);
-
-        for _ in 0..n_chunks {
-            let search_pos = last_pos + chunk_size;
-
-            if search_pos >= bytes.len() {
+        let mut offsets = Vec::new();
+        while last_pos < total_len {
+            let search_pos = last_pos.saturating_add(chunk_size);
+            if search_pos >= total_len {
                 break;
             }
 
-            let end_pos = match next_line_position(&bytes[search_pos..]) {
-                Some(pos) => search_pos + pos,
-                None => {
-                    break;
-                }
+            let Some(rel_end) = next_line_position(&bytes[search_pos..]) else {
+                break;
             };
+            let end_pos = search_pos.saturating_add(rel_end).min(total_len);
+            if end_pos <= last_pos {
+                break;
+            }
 
             offsets.push((last_pos, end_pos));
             last_pos = end_pos;
         }
 
         offsets.push((last_pos, total_len));
-
         offsets
     }
 }
@@ -483,38 +519,6 @@ fn get_line_stats_json(bytes: &[u8], n_lines: usize) -> Option<(f32, f32)> {
     Some((mean, std))
 }
 
-/// Calculate the max number of chunks to split the file into
-/// It looks for the largest number divisible by `n_threads` and less than `chunk_size`
-/// It has an arbitrary limit of `n_threads * n_threads`, which seems to work well in practice.
-///
-/// Example:
-///
-/// ```text
-/// n_threads = 4
-/// chunk_size = 2048
-/// calculate_chunks_and_size(n_threads, chunk_size) = (16, 128)
-/// ```
-fn calculate_chunks_and_size(n_threads: usize, chunk_size: usize, total: usize) -> (usize, usize) {
-    let mut max_divisible_chunks = n_threads;
-
-    // The maximum number of chunks is n_threads * n_threads
-    // This was chosen based on some crudely done benchmarks. It seems to work well in practice.
-    // The idea is to have a number of chunks that is a divisible by the number threads to maximize parallelism.
-    // But we dont want to have too small chunks, as that would increase the overhead of the parallelism.
-    // This is a heuristic and could be improved.
-    let max_chunks = n_threads * n_threads;
-
-    while max_divisible_chunks <= chunk_size && max_divisible_chunks < max_chunks {
-        let md = max_divisible_chunks + n_threads;
-        if md > chunk_size || md > max_chunks {
-            break;
-        }
-        max_divisible_chunks = md;
-    }
-    let chunk_size = total / n_threads;
-    (max_divisible_chunks, chunk_size)
-}
-
 #[inline(always)]
 fn parse_raw_value<'a>(
     raw_value: &'a RawValue,
@@ -536,12 +540,17 @@ fn next_line_position(input: &[u8]) -> Option<usize> {
         return Some(1);
     }
 
-    let is_closing_bracket = input.get(pos - 1) == Some(&CLOSING_BRACKET);
-    if is_closing_bracket {
-        Some(pos + 1)
-    } else {
-        None
+    let mut i = pos;
+    while i > 0 {
+        match input.get(i - 1) {
+            Some(b'\r' | b' ' | b'\t') => i -= 1,
+            _ => break,
+        }
     }
+    if i == 0 {
+        return Some(pos + 1);
+    }
+    (input.get(i - 1) == Some(&CLOSING_BRACKET)).then_some(pos + 1)
 }
 
 #[cfg(test)]
@@ -586,6 +595,7 @@ mod tests {
 {"floats": 3.0, "utf8": "!\\n", "bools": true}
 "#;
         let reader = JsonReader::try_new(json.as_bytes(), None, None, None, None).unwrap();
-        let _result = reader.finish();
+        let tbls = reader.finish_into_tables().unwrap();
+        assert_eq!(tbls.iter().map(|t| t.len()).sum::<usize>(), 3);
     }
 }

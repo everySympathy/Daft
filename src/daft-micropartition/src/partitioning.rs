@@ -182,15 +182,22 @@ impl PartitionSet<MicroPartitionRef> for MicroPartitionSet {
 /// if the partition set is dropped before the cache, it will be removed
 /// ex:
 /// ```rust,no_run
+/// use std::sync::Arc;
 ///
-///  let cache = InMemoryPartitionSetCache::empty();
-///  let outer =Arc::new(MicroPartitionSet::empty());
-///  cache.put_partition_set("outer", &outer);
+/// use daft_micropartition::partitioning::{
+///     InMemoryPartitionSetCache,
+///     MicroPartitionSet,
+///     PartitionSetCache,
+/// };
+///
+/// let cache = InMemoryPartitionSetCache::empty();
+/// let outer = Arc::new(MicroPartitionSet::empty());
+/// cache.put_partition_set("outer", &outer);
 /// {
-///   let inner = Arc::new(MicroPartitionSet::empty());
-///   cache.put_partition_set("inner", &inner);
-///   cache.get_partition_set("inner"); // Some(inner)
-///   // inner is dropped here
+///     let inner = Arc::new(MicroPartitionSet::empty());
+///     cache.put_partition_set("inner", &inner);
+///     cache.get_partition_set("inner"); // Some(inner)
+///     // inner is dropped here
 /// }
 ///
 /// cache.get_partition_set("inner"); // None

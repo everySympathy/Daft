@@ -23,11 +23,16 @@ pub fn split_by_jsonl_ranges<'a>(
         scan_tasks
             .map(move |t| -> DaftResult<BoxScanTaskIter<'a>> {
                 let t = t?;
-                if let (FileFormatConfig::Json(JsonSourceConfig { .. }), [source], Some(None)) = (
+                if let (
+                    FileFormatConfig::Json(JsonSourceConfig { chunk_size, .. }),
+                    [source],
+                    Some(None),
+                ) = (
                     t.file_format_config.as_ref(),
                     &t.sources[..],
                     t.sources.first().map(DataSource::get_chunk_spec),
                 ) {
+                    let split_size_bytes = chunk_size.unwrap_or(cfg.scan_tasks_max_size_bytes);
                     let path = source.get_path();
                     if !supports_split(path) {
                         return Ok(Box::new(std::iter::once(Ok(t))));
@@ -37,7 +42,7 @@ pub fn split_by_jsonl_ranges<'a>(
                     let size_bytes =
                         resolve_source_size(path, source.get_size_bytes(), &t.storage_config)?;
 
-                    if size_bytes <= cfg.scan_tasks_max_size_bytes {
+                    if size_bytes <= split_size_bytes {
                         return Ok(Box::new(std::iter::once(Ok(t))));
                     }
 
@@ -79,9 +84,7 @@ pub fn split_by_jsonl_ranges<'a>(
                     let mut pos = 0usize;
                     while pos < size_bytes {
                         // Use checked_add to avoid usize overflow on large positions
-                        let target = pos
-                            .checked_add(cfg.scan_tasks_max_size_bytes)
-                            .unwrap_or(size_bytes);
+                        let target = pos.checked_add(split_size_bytes).unwrap_or(size_bytes);
                         let end = align_right(target.min(size_bytes))?;
                         // Invariant: aligned end should always advance beyond current position
                         assert!(
@@ -229,6 +232,14 @@ mod tests {
     use crate::{ScanTask, StorageConfig};
 
     fn make_scan_task(path: &str, size_bytes: u64) -> ScanTask {
+        make_scan_task_with_json_cfg(path, size_bytes, JsonSourceConfig::default())
+    }
+
+    fn make_scan_task_with_json_cfg(
+        path: &str,
+        size_bytes: u64,
+        json_cfg: JsonSourceConfig,
+    ) -> ScanTask {
         ScanTask::new(
             vec![DataSource::File {
                 path: path.to_string(),
@@ -240,7 +251,7 @@ mod tests {
                 statistics: None,
                 parquet_metadata: None,
             }],
-            Arc::new(FileFormatConfig::Json(JsonSourceConfig::default())),
+            Arc::new(FileFormatConfig::Json(json_cfg)),
             Arc::new(daft_schema::schema::Schema::empty()),
             StorageConfig::default().into(),
             crate::Pushdowns::default(),
@@ -327,6 +338,38 @@ mod tests {
 
         // Clean up temporary file
         std::fs::remove_file(&file_path).unwrap();
+    }
+
+    #[test]
+    fn test_split_uses_json_source_chunk_size_override() {
+        let payload = (0..10_000)
+            .map(|i| format!("{{\"id\":{i}}}\n"))
+            .collect::<String>();
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let file_path = env::temp_dir().join(format!("daft-jsonl-chunk-override-{unique}.jsonl"));
+        fs::write(&file_path, payload.as_bytes()).unwrap();
+        let uri = Url::from_file_path(&file_path).unwrap().to_string();
+        let size_bytes = payload.len() as u64;
+
+        let st = make_scan_task_with_json_cfg(
+            &uri,
+            size_bytes,
+            JsonSourceConfig::new_internal(None, Some(4 * 1024), false),
+        );
+
+        let mut cfg = common_daft_config::DaftExecutionConfig::default();
+        cfg.scan_tasks_max_size_bytes = 256 * 1024 * 1024;
+        cfg.scan_tasks_min_size_bytes = 0;
+
+        let iter = split_by_jsonl_ranges(Box::new(std::iter::once(Ok(Arc::new(st).into()))), &cfg);
+        let out = iter.collect::<Vec<_>>();
+        assert!(out.len() > 1);
+
+        fs::remove_file(&file_path).unwrap();
     }
 
     #[test]
