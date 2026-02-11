@@ -17,7 +17,7 @@ const JSON_SUFFIXES: &[&str] = &[".json"];
 #[must_use]
 pub fn split_by_jsonl_ranges<'a>(
     scan_tasks: BoxScanTaskIter<'a>,
-    cfg: &'a DaftExecutionConfig,
+    _cfg: &'a DaftExecutionConfig,
 ) -> BoxScanTaskIter<'a> {
     Box::new(
         scan_tasks
@@ -32,7 +32,9 @@ pub fn split_by_jsonl_ranges<'a>(
                     &t.sources[..],
                     t.sources.first().map(DataSource::get_chunk_spec),
                 ) {
-                    let split_size_bytes = chunk_size.unwrap_or(cfg.scan_tasks_max_size_bytes);
+                    let Some(split_size_bytes) = *chunk_size else {
+                        return Ok(Box::new(std::iter::once(Ok(t))));
+                    };
                     let path = source.get_path();
                     if !supports_split(path) {
                         return Ok(Box::new(std::iter::once(Ok(t))));
@@ -297,10 +299,12 @@ mod tests {
         let size_bytes = payload.len() as u64;
 
         // Build a ScanTask and run split_by_jsonl_ranges
-        let st = make_scan_task(&uri, size_bytes);
+        let st = make_scan_task_with_json_cfg(
+            &uri,
+            size_bytes,
+            JsonSourceConfig::new_internal(None, Some(4 * 1024), false),
+        );
         let mut cfg = common_daft_config::DaftExecutionConfig::default();
-        // Lower thresholds to force splitting
-        cfg.scan_tasks_max_size_bytes = 4 * 1024; // 4KB
         cfg.scan_tasks_min_size_bytes = 0;
         let iter = split_by_jsonl_ranges(Box::new(std::iter::once(Ok(Arc::new(st).into()))), &cfg);
         let tasks = iter.collect::<Vec<_>>();

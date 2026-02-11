@@ -344,6 +344,14 @@ fn split_and_merge_pass(
         // Split JSONL by byte ranges aligned to line boundaries for JSONFileFormat, other formats will be leaked through.
         // If there are other file formats in the future, a pipeline can be constructed to pass split_tasks.
         let split_jsonl_tasks = split_jsonl::split_by_jsonl_ranges(iter, cfg);
+
+        if !cfg.enable_scan_task_split_and_merge {
+            let scan_tasks: Vec<Arc<dyn ScanTaskLike>> = split_jsonl_tasks
+                .map(|st| st.map(|task| task as Arc<dyn ScanTaskLike>))
+                .collect::<DaftResult<Vec<_>>>()?;
+            return Ok(Arc::new(scan_tasks));
+        }
+
         let split_tasks = split_by_row_groups(
             split_jsonl_tasks,
             cfg.parquet_split_row_groups_max_files,

@@ -121,17 +121,16 @@ impl TreeNodeVisitor for LogicalPlanToPipelineNodeTranslator {
                             ScanState::Tasks(scan_tasks) => scan_tasks.clone(),
                         };
                         // Perform scan task splitting and merging.
-                        let scan_tasks = if self.plan_config.config.enable_scan_task_split_and_merge
-                            && let Some(split_and_merge_pass) = SPLIT_AND_MERGE_PASS.get()
-                        {
-                            split_and_merge_pass(
-                                scan_tasks,
-                                &info.pushdowns,
-                                &self.plan_config.config,
-                            )?
-                        } else {
-                            scan_tasks
-                        };
+                        let scan_tasks =
+                            if let Some(split_and_merge_pass) = SPLIT_AND_MERGE_PASS.get() {
+                                split_and_merge_pass(
+                                    scan_tasks,
+                                    &info.pushdowns,
+                                    &self.plan_config.config,
+                                )?
+                            } else {
+                                scan_tasks
+                            };
                         ScanSourceNode::new(
                             self.get_next_pipeline_node_id(),
                             &self.plan_config,
