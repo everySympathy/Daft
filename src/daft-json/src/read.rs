@@ -347,12 +347,13 @@ pub async fn stream_json(
     let is_compressed = CompressionCodec::from_uri(&uri).is_some();
     if matches!(source_type, SourceType::File) && !is_compressed {
         let fixed_uri = fixed_uri.to_string();
-        let tables = read_json_local_into_tables(
+        let tables = crate::local::read_json_local_into_tables_with_range(
             fixed_uri.as_ref(),
             convert_options,
             parse_options,
             read_options,
             max_chunks_in_flight,
+            range,
         )?;
         return Ok(Box::pin(futures::stream::iter(tables.into_iter().map(Ok))));
     }
@@ -709,7 +710,7 @@ mod tests {
         prelude::*,
         utils::arrow::{cast_array_for_daft_if_needed, cast_array_from_daft_if_needed},
     };
-    use daft_io::{IOClient, IOConfig};
+    use daft_io::{GetRange, IOClient, IOConfig};
     use daft_recordbatch::RecordBatch;
     use futures::TryStreamExt;
     use indexmap::IndexMap;
@@ -965,6 +966,51 @@ mod tests {
 
         assert!(tables.len() > 1);
         assert_eq!(tables.iter().map(|t| t.len()).sum::<usize>(), 50);
+
+        std::fs::remove_file(&file_path).unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_json_local_range_is_respected() -> DaftResult<()> {
+        let payload = (0..100)
+            .map(|i| format!("{{\"a\":{i}}}\n"))
+            .collect::<String>();
+        let bytes = payload.as_bytes();
+        let tenth_newline = bytes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| (*b == b'\n').then_some(i))
+            .nth(9)
+            .unwrap()
+            + 1;
+
+        let file_path = std::env::temp_dir().join("daft-json-stream-local-range.jsonl");
+        std::fs::write(&file_path, bytes).unwrap();
+
+        let mut io_config = IOConfig::default();
+        io_config.s3.anonymous = true;
+        let io_client = Arc::new(IOClient::new(io_config.into())?);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tables = rt
+            .block_on(async {
+                let stream = super::stream_json(
+                    file_path.to_string_lossy().to_string(),
+                    None,
+                    None,
+                    Some(JsonReadOptions::default().with_chunk_size(Some(32))),
+                    io_client,
+                    None,
+                    None,
+                    Some(GetRange::Bounded(0..tenth_newline)),
+                )
+                .await?;
+                stream.try_collect::<Vec<_>>().await
+            })
+            .unwrap();
+
+        assert_eq!(tables.iter().map(|t| t.len()).sum::<usize>(), 10);
 
         std::fs::remove_file(&file_path).unwrap();
         Ok(())

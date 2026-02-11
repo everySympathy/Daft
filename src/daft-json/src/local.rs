@@ -4,6 +4,7 @@ use std::{borrow::Cow, collections::HashSet, num::NonZeroUsize, sync::Arc};
 use common_error::DaftResult;
 use daft_core::{prelude::*, utils::arrow::cast_array_for_daft_if_needed};
 use daft_dsl::{Expr, ExprRef, expr::bound_expr::BoundExpr};
+use daft_io::GetRange;
 use daft_recordbatch::RecordBatch;
 use indexmap::IndexMap;
 use num_traits::Pow;
@@ -47,6 +48,24 @@ pub fn read_json_local_into_tables(
     read_options: Option<JsonReadOptions>,
     max_chunks_in_flight: Option<usize>,
 ) -> DaftResult<Vec<RecordBatch>> {
+    read_json_local_into_tables_with_range(
+        uri,
+        convert_options,
+        parse_options,
+        read_options,
+        max_chunks_in_flight,
+        None,
+    )
+}
+
+pub fn read_json_local_into_tables_with_range(
+    uri: &str,
+    convert_options: Option<JsonConvertOptions>,
+    parse_options: Option<JsonParseOptions>,
+    read_options: Option<JsonReadOptions>,
+    max_chunks_in_flight: Option<usize>,
+    range: Option<GetRange>,
+) -> DaftResult<Vec<RecordBatch>> {
     let uri = uri.trim_start_matches("file://");
     let file = std::fs::File::open(uri)?;
     // SAFETY: mmapping is inherently unsafe.
@@ -54,6 +73,22 @@ pub fn read_json_local_into_tables(
     let mmap = unsafe { memmap2::Mmap::map(&file) }.context(StdIOSnafu)?;
 
     let bytes = &mmap[..];
+    let bytes = match range {
+        Some(GetRange::Bounded(r)) => {
+            let start = r.start.min(bytes.len());
+            let end = r.end.min(bytes.len()).max(start);
+            &bytes[start..end]
+        }
+        Some(GetRange::Offset(off)) => {
+            let start = off.min(bytes.len());
+            &bytes[start..]
+        }
+        Some(GetRange::Suffix(len)) => {
+            let len = len.min(bytes.len());
+            &bytes[bytes.len() - len..]
+        }
+        None => bytes,
+    };
     if parse_options.as_ref().is_some_and(|p| p.skip_empty_files) && bytes.is_empty() {
         let schema = convert_options
             .as_ref()
