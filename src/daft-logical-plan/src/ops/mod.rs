@@ -47,8 +47,10 @@ pub use shard::Shard;
 pub use shuffle::Shuffle;
 pub use sink::Sink;
 #[cfg(feature = "python")]
+pub use skip_existing::PyKeyFilteringConfig;
+#[cfg(feature = "python")]
 pub use skip_existing::PySkipExistingSpec;
-pub use skip_existing::SkipExistingSpec;
+pub use skip_existing::{KeyFilteringConfig, SkipExistingSpec};
 pub use sort::Sort;
 pub use source::Source;
 pub use summarize::summarize;

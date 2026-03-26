@@ -165,10 +165,8 @@ impl TreeNodeVisitor for LogicalPlanToPipelineNodeTranslator {
                         &self.meter,
                     ),
                     SourceInfo::PlaceHolder(info) => {
-                        // PlaceHolder sources are used as the right side of KeyFiltering anti-joins.
-                        // They produce no data; KeyFilteringJoinNode handles the actual filtering
-                        // and lazily creates Ray actors. We add a dummy source node so the tree
-                        // visitor still has a node for the join to pop from its stack.
+                        // PlaceHolder sources are logical no-data sentinels. We create a dummy
+                        // InMemorySourceNode here so tree translation can keep its stack discipline.
                         let dummy_info = daft_logical_plan::InMemoryInfo::new(
                             info.source_schema.clone(),
                             "__placeholder__".to_string(),
