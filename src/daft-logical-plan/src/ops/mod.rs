@@ -6,6 +6,7 @@ mod filter;
 mod into_batches;
 mod into_partitions;
 pub mod join;
+pub mod key_filtering;
 mod limit;
 mod monotonically_increasing_id;
 mod offset;
@@ -17,7 +18,6 @@ mod set_operations;
 mod shard;
 mod shuffle;
 mod sink;
-pub mod skip_existing;
 mod sort;
 mod source;
 mod summarize;
@@ -35,6 +35,9 @@ pub use filter::Filter;
 pub use into_batches::IntoBatches;
 pub use into_partitions::IntoPartitions;
 pub use join::Join;
+pub use key_filtering::KeyFilteringConfig;
+#[cfg(feature = "python")]
+pub use key_filtering::PyKeyFilteringConfig;
 pub use limit::Limit;
 pub use monotonically_increasing_id::MonotonicallyIncreasingId;
 pub use offset::Offset;
@@ -46,11 +49,6 @@ pub use set_operations::{Except, Intersect, SetQuantifier, Union, UnionStrategy}
 pub use shard::Shard;
 pub use shuffle::Shuffle;
 pub use sink::Sink;
-#[cfg(feature = "python")]
-pub use skip_existing::PyKeyFilteringConfig;
-#[cfg(feature = "python")]
-pub use skip_existing::PySkipExistingSpec;
-pub use skip_existing::{KeyFilteringConfig, SkipExistingSpec};
 pub use sort::Sort;
 pub use source::Source;
 pub use summarize::summarize;
