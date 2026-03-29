@@ -8,6 +8,10 @@ Notes:
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -505,3 +509,84 @@ def test_skip_existing_invalid_cpus_per_worker_raises(tmp_path: Path):
         df.skip_existing(
             existing_path=existing_dir, key_column="id", file_format="parquet", cpus_per_worker=0
         ).collect()
+
+
+@pytest.mark.skipif(get_tests_daft_runner_name() != "ray", reason="requires Ray Runner to be in use")
+@pytest.mark.xfail(
+    reason="Known Flotilla bug: when skip_existing is the first Daft query in a fresh process, "
+    "the nested key-loading collect can collide on plan_id state and fail with KeyError('0').",
+    strict=False,
+)
+def test_skip_existing_first_query_in_fresh_process(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    input_dir = tmp_path / "input"
+    existing_dir = tmp_path / "existing"
+    output_dir = tmp_path / "output"
+
+    script = textwrap.dedent(
+        f"""
+        from __future__ import annotations
+
+        from pathlib import Path
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        import daft
+        from daft import DataType, Series
+        from daft.expressions.expressions import col
+
+        input_dir = Path({str(input_dir)!r})
+        existing_dir = Path({str(existing_dir)!r})
+        output_dir = Path({str(output_dir)!r})
+        input_dir.mkdir(parents=True, exist_ok=True)
+        existing_dir.mkdir(parents=True, exist_ok=True)
+
+        # Seed the source/existing data with pyarrow so the first Daft query in the process
+        # is the write that uses skip_existing.
+        pq.write_table(
+            pa.table({{"id": list(range(10)), "value": [f"v{{i}}" for i in range(10)]}}),
+            input_dir / "part-0.parquet",
+        )
+        pq.write_table(
+            pa.table({{"id": [0, 1], "value": ["v0", "v1"]}}),
+            existing_dir / "part-0.parquet",
+        )
+
+        @daft.cls
+        class MyDemoUDF:
+            @daft.method.batch(return_dtype=DataType.string(), batch_size=7)
+            def name(self, x: Series) -> Series:
+                prefix = Series.from_pylist(["-hello "], name="xx", dtype=DataType.string())
+                return prefix + x
+
+        @daft.cls
+        class MyDemoUDF1:
+            @daft.method.batch(return_dtype=DataType.string())
+            def name(self, x: Series) -> Series:
+                prefix = Series.from_pylist(["-hello "], name="xx", dtype=DataType.string())
+                return prefix + x
+
+        daft.set_execution_config(enable_scan_task_split_and_merge=True, max_sources_per_scan_task=100)
+        df = daft.read_parquet(str(input_dir))
+        df = df.skip_existing(existing_path=str(existing_dir), key_column="id", file_format="parquet")
+        df = df.with_column("hello1", MyDemoUDF1().name(col("value")))
+        df = df.with_column("hello", MyDemoUDF().name(col("value")))
+        df.write_parquet(str(output_dir))
+        """
+    )
+
+    env = os.environ.copy()
+    env["DAFT_RUNNER"] = "ray"
+    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{env['PYTHONPATH']}" if "PYTHONPATH" in env else str(repo_root)
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
