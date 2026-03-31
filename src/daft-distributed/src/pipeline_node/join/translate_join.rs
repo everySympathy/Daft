@@ -363,7 +363,7 @@ impl LogicalPlanToPipelineNodeTranslator {
                         join.output_schema.clone(),
                         left_node,
                     )
-                    .into_node())
+                    .into_node(&self.meter))
                 }
                 #[cfg(not(feature = "python"))]
                 {

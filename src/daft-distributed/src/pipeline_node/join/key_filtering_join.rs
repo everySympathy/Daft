@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use common_error::{DaftError, DaftResult};
-use common_metrics::ops::{NodeCategory, NodeType};
+use common_metrics::{
+    Meter,
+    ops::{NodeCategory, NodeType},
+};
 use common_py_serde::PyObjectWrapper;
 use common_runtime::{JoinSet, python::execute_python_coroutine};
 use daft_dsl::{ExprRef, expr::bound_expr::BoundExpr, python::PyExpr};
@@ -12,7 +15,6 @@ use daft_logical_plan::{
 };
 use daft_schema::schema::SchemaRef;
 use futures::StreamExt;
-use opentelemetry::metrics::Meter;
 use pyo3::{Py, PyAny, Python, types::PyAnyMethods};
 
 use crate::{
@@ -211,8 +213,8 @@ impl KeyFilteringJoinNode {
         }
     }
 
-    pub fn into_node(self) -> DistributedPipelineNode {
-        DistributedPipelineNode::new(Arc::new(self))
+    pub fn into_node(self, meter: &Meter) -> DistributedPipelineNode {
+        DistributedPipelineNode::new(Arc::new(self), meter)
     }
 
     async fn execution_loop(
@@ -320,7 +322,7 @@ impl PipelineNodeImpl for KeyFilteringJoinNode {
         ]
     }
 
-    fn runtime_stats(&self, meter: &Meter) -> RuntimeStatsRef {
+    fn make_runtime_stats(&self, meter: &Meter) -> RuntimeStatsRef {
         Arc::new(DefaultRuntimeStats::new(meter, self.context()))
     }
 

@@ -9,8 +9,8 @@ impl MaterializeScans {
 use std::sync::Arc;
 
 use common_error::DaftResult;
-use common_scan_info::ScanState;
 use common_treenode::{Transformed, TreeNode};
+use daft_scan::ScanState;
 
 use super::OptimizerRule;
 use crate::{LogicalPlan, SourceInfo};
